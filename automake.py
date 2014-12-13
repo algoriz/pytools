@@ -16,17 +16,31 @@ def tostr(items):
     return str[:-1]
 
 
+def rmfile(path):
+    try:
+        os.remove(path)
+    except Exception:
+        pass
+
+
 class AutoMake:
+    # link type
+    lo_static_library = 'static'
+    lo_program = 'program'
+    lo_shared_library = 'shared'
+    lo_none = 'none'
+
     def __init__(self, source_dir='./'):
         if not source_dir.endswith('/'):
             source_dir += '/'
         self.source_dir = source_dir
-        self.object_dir = source_dir + 'obj/'
-        self.output_dir = source_dir + 'out/'
+        self.object_dir = '../obj/'
+        self.output_dir = '../out/'
+        self.output_name = ''
         self.compiler = ''
         self.compile_options = ''
         self.link_options = ''
-        self.link_type = 'executable'
+        self.link_type = AutoMake.lo_program
         self.includes = '-I./'
         self.header_filter = ['h', 'hh', 'hpp', None]
         self.source_filter = ['cc', 'c', 'cxx', 'cpp']
@@ -42,11 +56,14 @@ class AutoMake:
     def load(self, fpath):
         """ Load configurations from an automake file. """
         d = json.load(open(fpath))
-        self.source_dir = d['source_dir']
-        self.object_dir = d['object_dir']
-        self.compiler = d['compiler']
+        self.source_dir = d['source_dir'].strip(' \t')
+        self.object_dir = d['object_dir'].strip(' \t')
+        self.output_dir = d['output_dir'].strip(' \t')
+        self.output_name = d['output_name'].strip(' \t')
+        self.compiler = d['compiler'].strip(' \t')
         self.compile_options = d['compile_options']
         self.link_options = d['link_options']
+        self.link_type = d['link_type']
         self.includes = d['includes']
         self.header_filter = d['header_filter']
         self.source_filter = d['source_filter']
@@ -66,6 +83,26 @@ class AutoMake:
         else:
             self.compiler = 'g++'
 
+    def get_output(self):
+        if len(self.output_name) != 0:
+            return self.output_name
+        # if the output name is not specified, then use the directory name as output name
+        dirname = os.path.realpath(self.source_dir)
+        if dirname.endswith('/'):
+            dirname = dirname[:-1]
+        name = ''
+        p = dirname.rfind('/')
+        if p == -1:
+            name = 'out'
+        else:
+            name = dirname[p+1:]
+        # alter output name for output of static/shared library type
+        if self.link_type == AutoMake.lo_static_library:
+            name = 'lib' + name + '.a'
+        elif self.link_type == AutoMake.lo_shared_library:
+            name = 'lib' + name + '.so'
+        return name
+
     def get_objects(self):
         """ Get objects of current project.
           Returns a dictionary of <object, source>
@@ -78,6 +115,12 @@ class AutoMake:
             if parts[1] in self.source_filter:
                 objs[parts[0] + '.o'] = name
         return objs
+
+    def get_object_files(self):
+        return [self.object_dir + o for o in self.get_objects()]
+
+    def get_output_file(self):
+        return self.output_dir+self.get_output()
 
     def get_dependencies(self):
         """ Generate object dependency list by invoking compiler with '-MM' option.
@@ -96,20 +139,30 @@ class AutoMake:
 
     def compile(self, src, out, options=''):
         command = self.compiler + ' ' + options + ' -c ' + src + ' -o ' + out
-        with os.popen(command) as t:
-            print(t.read())
+        print(command)
+        with os.popen(command) as d:
+            print(d.read())
 
     def link(self):
-        if self.link_type == 'executable':
-            pass
-        elif self.link_type == 'library':
-            pass
+        command = ''
+        if self.link_type == AutoMake.lo_program:
+            command = '%s %s -o %s %s' % \
+                      (self.compiler, self.link_options, self.get_output_file(), tostr(self.get_object_files()))
+        elif self.link_type == AutoMake.lo_shared_library:
+            command = '%s %s -o %s %s' % \
+                      (self.compiler, self.link_options, self.get_output_file(), tostr(self.get_object_files()))
+        elif self.link_type == AutoMake.lo_static_library:
+            command = 'ar %s %s %s' % \
+                      (self.link_options, self.get_output(), tostr(self.get_object_files()))
         elif self.link_type == 'none':
-            pass
+            print('automake: nothing to do at link stage.')
+            return
         else:
-            print('automake error: unknown link type \'' + self.link_type + '\'')
+            print('automake error: unknown link type \'' + self.link_type + '\'.')
             exit(2)
-
+        print(command)
+        with os.popen(command) as d:
+            print(d.read())
 
     @staticmethod
     def check_target(target, deps):
@@ -142,16 +195,16 @@ class AutoMake:
             if not self.check_target(target, target_deps):
                 self.compile(src, target, self.compile_options)
         # link
-
+        self.ensure_dir(self.output_dir)
+        self.link()
 
     def clean(self):
-        objs = self.get_objects()
-        for o in objs:
-            try:
-                os.remove(self.object_dir+o)
-            except Exception:
-                # ignore errors
-                pass
+        if self.link_type != AutoMake.lo_none:
+            print('delete ' + self.get_output_file())
+            rmfile(self.get_output_file())
+        for o in self.get_object_files():
+            print('delete ' + o)
+            rmfile(o)
 
 
 def getarg(argv, arg_switch, fallback=''):
