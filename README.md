@@ -1,5 +1,7 @@
 pytools
 =======
+h2.py
+  An automated build tool
 
-lc.py
-  count lines
+seal-server.py
+  A transparent HTTP proxy server with tunnel support.
